@@ -1,0 +1,12 @@
+{
+  "name": "tacvt",
+  "version": "1.0.0",
+  "description": "Fast conversion between TypedArray types",
+  "main": "index.js",
+  "repository": "https://github.com/zbjornson/tacvt",
+  "author": "Zach Bjornson <zbbjornson@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "nan": "^2.12.1"
+  }
+}
