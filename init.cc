@@ -1,16 +1,21 @@
 #include "nan.h"
-#include "intrin.h"
 #include "stdint.h"
+#include <cmath>
+#if defined(_MSC_VER)
+  #include <intrin.h>
+#elif defined(__GNUC__)
+  #include <x86intrin.h>
+#endif
 
 // Name: from_to
 
 NAN_METHOD(Float32Array_Float64Array) {
-	v8::Local<v8::Float64Array> dstTA = info[0].As<v8::Float64Array>();
-	v8::Local<v8::Float32Array> srcTA = info[1].As<v8::Float32Array>();
+	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();
+	v8::Local<v8::ArrayBufferView> srcTA = info[1].As<v8::ArrayBufferView>();
 	Nan::TypedArrayContents<double> dst(dstTA);
 	Nan::TypedArrayContents<float> src(srcTA);
 
-	for (size_t i = 0; i < dstTA->Length(); i += 16) {
+	for (size_t i = 0; i < dst.length(); i += 16) {
 		auto srcvA = _mm_loadu_ps(&(*src)[i + 0]);
 		auto srcvB = _mm_loadu_ps(&(*src)[i + 4]);
 		auto srcvC = _mm_loadu_ps(&(*src)[i + 8]);
@@ -29,12 +34,12 @@ NAN_METHOD(Float32Array_Float64Array) {
 }
 
 NAN_METHOD(Float64Array_Float32Array) {
-	v8::Local<v8::Float32Array> dstTA = info[0].As<v8::Float32Array>();
-	v8::Local<v8::Float64Array> srcTA = info[1].As<v8::Float64Array>();
+	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();
+	v8::Local<v8::ArrayBufferView> srcTA = info[1].As<v8::ArrayBufferView>();
 	Nan::TypedArrayContents<float> dst(dstTA);
 	Nan::TypedArrayContents<double> src(srcTA);
 
-	for (size_t i = 0; i < dstTA->Length(); i += 16) {
+	for (size_t i = 0; i < dst.length(); i += 16) {
 		auto srcvA = _mm256_loadu_pd(&(*src)[i + 0]);
 		auto srcvB = _mm256_loadu_pd(&(*src)[i + 4]);
 		auto srcvC = _mm256_loadu_pd(&(*src)[i + 8]);
@@ -53,108 +58,196 @@ NAN_METHOD(Float64Array_Float32Array) {
 }
 
 NAN_METHOD(Float32Array_Int32Array) {
-	v8::Local<v8::Int32Array> dstTA = info[0].As<v8::Int32Array>();
-	v8::Local<v8::Float32Array> srcTA = info[1].As<v8::Float32Array>();
+	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();
+	v8::Local<v8::ArrayBufferView> srcTA = info[1].As<v8::ArrayBufferView>();
 	Nan::TypedArrayContents<int32_t> dst(dstTA);
 	Nan::TypedArrayContents<float> src(srcTA);
 
-	for (size_t i = 0; i < dstTA->Length(); i += 8*4) {
-		auto srcvA = _mm256_loadu_ps(&(*src)[i + 0]);
-		auto srcvB = _mm256_loadu_ps(&(*src)[i + 8]);
-		auto srcvC = _mm256_loadu_ps(&(*src)[i + 16]);
-		auto srcvD = _mm256_loadu_ps(&(*src)[i + 24]);
+	// TODO possibly unroll
+	for (size_t i = 0; i < dst.length(); i += 8) {
+		auto srcvA = _mm256_loadu_ps(&(*src)[i]);
+		// Floor for the exact conversion test several lines down
+		srcvA = _mm256_round_ps(srcvA, _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC);
+		// Fast path: no Infinity, -Infinity, NaN or magnitude >2**32
+		// WARNING! There seems to be a bug in MSVC 2015 but not 2017 where this emits vcvtps2dq
+		auto dstvA = _mm256_cvttps_epi32(srcvA); // could be cvtps since there has to be the round() above
+		auto backA = _mm256_cvtepi32_ps(dstvA);
+		auto exact = _mm256_cmpeq_epi32(_mm256_castps_si256(srcvA), _mm256_castps_si256(backA));
+		// _mm256_cmpeq_epi32 has 3 cycles less latency than _mm256_cmp_ps, at the cost of bypass delay
+		// Also, idk if JS has multiple NaNs or -0, in which case this would give false-positives
 
-		auto dstvA = _mm256_cvttps_epi32(srcvA);
-		auto dstvB = _mm256_cvttps_epi32(srcvB);
-		auto dstvC = _mm256_cvttps_epi32(srcvC);
-		auto dstvD = _mm256_cvttps_epi32(srcvD);
+		_mm256_storeu_si256(reinterpret_cast<__m256i*>(&(*dst)[i]), dstvA);
 
-		_mm256_store_si256((__m256i*)&(*dst)[i + 0], dstvA);
-		_mm256_store_si256((__m256i*)&(*dst)[i + 8], dstvB);
-		_mm256_store_si256((__m256i*)&(*dst)[i + 16], dstvC);
-		_mm256_store_si256((__m256i*)&(*dst)[i + 24], dstvD);
+		// auto allexact = !_mm256_testc_si256(exact, _mm256_set1_epi8(0xFF));
+		auto exactMask = _mm256_movemask_ps(_mm256_castsi256_ps(exact));
+		if (exactMask != 0xFF) { // Slow path: fixup.
+			// It might be faster to port v8's conversions-inl.h:DoubleToInt32 to SIMD,
+			// but once all of the conditional code paths are turned into predicated
+			// operations, it might not be fast.
+			for (size_t j = 0; j < 8; j++) {
+				if (exactMask & (1 << j)) continue;
+				auto value = (*src)[i + j];
+				if (std::isnan(value)) {
+					value = 0;
+				} else if (std::isinf(value)) {
+					value = 0;
+				} else { // overflow -- maybe faster to use std::isfinite at the top of the if/else since this is probably most common
+					value = fmod(value, 0xFFFFFFFF);
+				}
+				(*dst)[i + j] = value;
+			}
+		}
 	}
 }
 
-NAN_METHOD(Int32Array_Float32Array) {
-	v8::Local<v8::Float32Array> dstTA = info[0].As<v8::Float32Array>();
-	v8::Local<v8::Int32Array> srcTA = info[1].As<v8::Int32Array>();
-	Nan::TypedArrayContents<float> dst(dstTA);
-	Nan::TypedArrayContents<int32_t> src(srcTA);
-
-	for (size_t i = 0; i < dstTA->Length(); i += 8*4) {
-		auto srcvA = _mm256_lddqu_si256((__m256i*)&(*src)[i + 0]);
-		auto srcvB = _mm256_lddqu_si256((__m256i*)&(*src)[i + 8]);
-		auto srcvC = _mm256_lddqu_si256((__m256i*)&(*src)[i + 16]);
-		auto srcvD = _mm256_lddqu_si256((__m256i*)&(*src)[i + 24]);
-
-		auto dstvA = _mm256_cvtepi32_ps(srcvA);
-		auto dstvB = _mm256_cvtepi32_ps(srcvB);
-		auto dstvC = _mm256_cvtepi32_ps(srcvC);
-		auto dstvD = _mm256_cvtepi32_ps(srcvD);
-
-		_mm256_storeu_ps(&(*dst)[i + 0], dstvA);
-		_mm256_storeu_ps(&(*dst)[i + 8], dstvB);
-		_mm256_storeu_ps(&(*dst)[i + 16], dstvC);
-		_mm256_storeu_ps(&(*dst)[i + 24], dstvD);
-	}
+#define IntToIntConvert(Name, dsttype, srctype, cvtop)							\
+NAN_METHOD(Name) {																\
+	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();	\
+	v8::Local<v8::ArrayBufferView> srcTA = info[1].As<v8::ArrayBufferView>();	\
+	Nan::TypedArrayContents<dsttype> dst(dstTA);								\
+	Nan::TypedArrayContents<srctype> src(srcTA);								\
+	size_t nel = 256 / (sizeof(dsttype) * 8);									\
+	for (size_t i = 0; i < dst.length(); i += nel * 4) {						\
+		auto srcvA = _mm_lddqu_si128((__m128i*)&(*src)[i]);						\
+		auto srcvB = _mm_lddqu_si128((__m128i*)&(*src)[i + nel]);				\
+		auto srcvC = _mm_lddqu_si128((__m128i*)&(*src)[i + 2 * nel]);			\
+		auto srcvD = _mm_lddqu_si128((__m128i*)&(*src)[i + 3 * nel]);			\
+																				\
+		auto dstvA = cvtop(srcvA);												\
+		auto dstvB = cvtop(srcvB);												\
+		auto dstvC = cvtop(srcvC);												\
+		auto dstvD = cvtop(srcvD);												\
+																				\
+		_mm256_storeu_si256((__m256i*)&(*dst)[i], dstvA);						\
+		_mm256_storeu_si256((__m256i*)&(*dst)[i + nel], dstvB);					\
+		_mm256_storeu_si256((__m256i*)&(*dst)[i + 2 * nel], dstvC);				\
+		_mm256_storeu_si256((__m256i*)&(*dst)[i + 3 * nel], dstvD);				\
+	}																			\
 }
 
-NAN_METHOD(Int8Array_Int32Array) {
-	v8::Local<v8::Int32Array> dstTA = info[0].As<v8::Int32Array>();
-	v8::Local<v8::Int8Array> srcTA = info[1].As<v8::Int8Array>();
-	Nan::TypedArrayContents<int32_t> dst(dstTA);
-	Nan::TypedArrayContents<int8_t> src(srcTA);
+IntToIntConvert(Int16Array_Int32Array, int32_t, int16_t, _mm256_cvtepi16_epi32)
+IntToIntConvert(Uint16Array_Uint32Array, uint32_t, uint16_t, _mm256_cvtepu16_epi32)
+IntToIntConvert(Int8Array_Int32Array, int32_t, int8_t, _mm256_cvtepi8_epi32)
+IntToIntConvert(Uint8Array_Uint32Array, uint32_t, uint8_t, _mm256_cvtepu8_epi32)
+IntToIntConvert(Int8Array_Int16Array, int16_t, int8_t, _mm256_cvtepi8_epi16)
+IntToIntConvert(Uint8Array_Uint16Array, uint16_t, uint8_t, _mm256_cvtepu8_epi16)
+#undef IntToIntConvert
 
-	for (size_t i = 0; i < dstTA->Length(); i += 8*4) {
-		auto srcvA = _mm_lddqu_si128((__m128i*)&(*src)[i + 0]);
-		auto srcvB = _mm_lddqu_si128((__m128i*)&(*src)[i + 8]);
-		auto srcvC = _mm_lddqu_si128((__m128i*)&(*src)[i + 16]);
-		auto srcvD = _mm_lddqu_si128((__m128i*)&(*src)[i + 24]);
-
-		auto dstvA = _mm256_cvtepi8_epi32(srcvA);
-		auto dstvB = _mm256_cvtepi8_epi32(srcvB);
-		auto dstvC = _mm256_cvtepi8_epi32(srcvC);
-		auto dstvD = _mm256_cvtepi8_epi32(srcvD);
-
-		_mm256_storeu_si256((__m256i*)&(*dst)[i + 0], dstvA);
-		_mm256_storeu_si256((__m256i*)&(*dst)[i + 8], dstvB);
-		_mm256_storeu_si256((__m256i*)&(*dst)[i + 16], dstvC);
-		_mm256_storeu_si256((__m256i*)&(*dst)[i + 24], dstvD);
-	}
+#define IntToFloatSameSizeConvert(Name, dsttype, srctype, cvtop)				\
+NAN_METHOD(Name) {											\
+	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();	\
+	v8::Local<v8::ArrayBufferView> srcTA = info[1].As<v8::ArrayBufferView>();	\
+	Nan::TypedArrayContents<dsttype> dst(dstTA);								\
+	Nan::TypedArrayContents<srctype> src(srcTA);								\
+																				\
+	for (size_t i = 0; i < dst.length(); i += 8*4) {							\
+		auto srcvA = _mm256_lddqu_si256((__m256i*)&(*src)[i + 0]);				\
+		auto srcvB = _mm256_lddqu_si256((__m256i*)&(*src)[i + 8]);				\
+		auto srcvC = _mm256_lddqu_si256((__m256i*)&(*src)[i + 16]);				\
+		auto srcvD = _mm256_lddqu_si256((__m256i*)&(*src)[i + 24]);				\
+																				\
+		auto dstvA = cvtop(srcvA);												\
+		auto dstvB = cvtop(srcvB);												\
+		auto dstvC = cvtop(srcvC);												\
+		auto dstvD = cvtop(srcvD);												\
+																				\
+		_mm256_storeu_ps(&(*dst)[i + 0], dstvA);								\
+		_mm256_storeu_ps(&(*dst)[i + 8], dstvB);								\
+		_mm256_storeu_ps(&(*dst)[i + 16], dstvC);								\
+		_mm256_storeu_ps(&(*dst)[i + 24], dstvD);								\
+	}																			\
 }
 
-NAN_METHOD(Uint8Array_Uint32Array) {
-	v8::Local<v8::Uint32Array> dstTA = info[0].As<v8::Uint32Array>();
-	v8::Local<v8::Uint8Array> srcTA = info[1].As<v8::Uint8Array>();
-	Nan::TypedArrayContents<uint32_t> dst(dstTA);
-	Nan::TypedArrayContents<uint8_t> src(srcTA);
+IntToFloatSameSizeConvert(Int32Array_Float32Array, float, int32_t, _mm256_cvtepi32_ps)
+#undef IntToFloatSameSizeConvert
 
-	for (size_t i = 0; i < dstTA->Length(); i += 8*4) {
-		auto srcvA = _mm_lddqu_si128((__m128i*)&(*src)[i + 0]);
-		auto srcvB = _mm_lddqu_si128((__m128i*)&(*src)[i + 8]);
-		auto srcvC = _mm_lddqu_si128((__m128i*)&(*src)[i + 16]);
-		auto srcvD = _mm_lddqu_si128((__m128i*)&(*src)[i + 24]);
-
-		auto dstvA = _mm256_cvtepu8_epi32(srcvA);
-		auto dstvB = _mm256_cvtepu8_epi32(srcvB);
-		auto dstvC = _mm256_cvtepu8_epi32(srcvC);
-		auto dstvD = _mm256_cvtepu8_epi32(srcvD);
-
-		_mm256_storeu_si256((__m256i*)&(*dst)[i + 0], dstvA);
-		_mm256_storeu_si256((__m256i*)&(*dst)[i + 8], dstvB);
-		_mm256_storeu_si256((__m256i*)&(*dst)[i + 16], dstvC);
-		_mm256_storeu_si256((__m256i*)&(*dst)[i + 24], dstvD);
-	}
+#define IntToFloatConvert(Name, srctype, cvtop)									\
+NAN_METHOD(Name) {																\
+	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();	\
+	v8::Local<v8::ArrayBufferView> srcTA = info[1].As<v8::ArrayBufferView>();	\
+	Nan::TypedArrayContents<float> dst(dstTA);									\
+	Nan::TypedArrayContents<srctype> src(srcTA);								\
+	size_t nel = 256 / (sizeof(float) * 8);										\
+	for (size_t i = 0; i < dst.length(); i += nel * 4) {						\
+		auto srcvA = _mm_lddqu_si128((__m128i*)&(*src)[i]);						\
+		auto srcvB = _mm_lddqu_si128((__m128i*)&(*src)[i + nel]);				\
+		auto srcvC = _mm_lddqu_si128((__m128i*)&(*src)[i + 2 * nel]);			\
+		auto srcvD = _mm_lddqu_si128((__m128i*)&(*src)[i + 3 * nel]);			\
+																				\
+		auto dstvA = _mm256_cvtepi32_ps(cvtop(srcvA));							\
+		auto dstvB = _mm256_cvtepi32_ps(cvtop(srcvB));							\
+		auto dstvC = _mm256_cvtepi32_ps(cvtop(srcvC));							\
+		auto dstvD = _mm256_cvtepi32_ps(cvtop(srcvD));							\
+																				\
+		_mm256_storeu_ps(&(*dst)[i], dstvA);									\
+		_mm256_storeu_ps(&(*dst)[i + nel], dstvB);								\
+		_mm256_storeu_ps(&(*dst)[i + 2 * nel], dstvC);							\
+		_mm256_storeu_ps(&(*dst)[i + 3 * nel], dstvD);							\
+	}																			\
 }
+
+IntToFloatConvert(Int16Array_Float32Array, int16_t, _mm256_cvtepi16_epi32)
+IntToFloatConvert(Uint16Array_Float32Array, uint16_t, _mm256_cvtepu16_epi32)
+IntToFloatConvert(Int8Array_Float32Array, int8_t, _mm256_cvtepi8_epi32)
+IntToFloatConvert(Uint8Array_Float32Array, uint8_t, _mm256_cvtepu8_epi32)
+#undef IntToFloatConvert
+
+#define IntToDoubleConvert(Name, srctype, cvtop)								\
+NAN_METHOD(Name) {																\
+	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();	\
+	v8::Local<v8::ArrayBufferView> srcTA = info[1].As<v8::ArrayBufferView>();	\
+	Nan::TypedArrayContents<double> dst(dstTA);									\
+	Nan::TypedArrayContents<srctype> src(srcTA);								\
+	size_t nel = 256 / (sizeof(double) * 8);									\
+	for (size_t i = 0; i < dst.length(); i += nel * 4) {						\
+		auto srcvA = _mm_lddqu_si128((__m128i*)&(*src)[i]);						\
+		auto srcvB = _mm_lddqu_si128((__m128i*)&(*src)[i + nel]);				\
+		auto srcvC = _mm_lddqu_si128((__m128i*)&(*src)[i + 2 * nel]);			\
+		auto srcvD = _mm_lddqu_si128((__m128i*)&(*src)[i + 3 * nel]);			\
+																				\
+		auto dstvA = _mm256_cvtepi32_pd(cvtop(srcvA));							\
+		auto dstvB = _mm256_cvtepi32_pd(cvtop(srcvB));							\
+		auto dstvC = _mm256_cvtepi32_pd(cvtop(srcvC));							\
+		auto dstvD = _mm256_cvtepi32_pd(cvtop(srcvD));							\
+																				\
+		_mm256_storeu_pd(&(*dst)[i], dstvA);									\
+		_mm256_storeu_pd(&(*dst)[i + nel], dstvB);								\
+		_mm256_storeu_pd(&(*dst)[i + 2 * nel], dstvC);							\
+		_mm256_storeu_pd(&(*dst)[i + 3 * nel], dstvD);							\
+	}																			\
+}
+
+IntToDoubleConvert(Int32Array_Float64Array, int32_t, )
+IntToDoubleConvert(Int16Array_Float64Array, int16_t, _mm_cvtepi16_epi32)
+IntToDoubleConvert(Uint16Array_Float64Array, uint16_t, _mm_cvtepu16_epi32)
+IntToDoubleConvert(Int8Array_Float64Array, int8_t, _mm_cvtepi8_epi32)
+IntToDoubleConvert(Uint8Array_Float64Array, uint8_t, _mm_cvtepu8_epi32)
+#undef IntToDoubleConvert
 
 NAN_MODULE_INIT(Init) {
-	NAN_EXPORT(target, Float32Array_Float64Array);
 	NAN_EXPORT(target, Float64Array_Float32Array);
-	NAN_EXPORT(target, Int32Array_Float32Array);
-	NAN_EXPORT(target, Int8Array_Int32Array);
-	NAN_EXPORT(target, Uint8Array_Uint32Array);
+	NAN_EXPORT(target, Float32Array_Float64Array);
+
 	NAN_EXPORT(target, Float32Array_Int32Array);
+
+	NAN_EXPORT(target, Int16Array_Int32Array);
+	NAN_EXPORT(target, Uint16Array_Uint32Array);
+	NAN_EXPORT(target, Int8Array_Int32Array);
+	NAN_EXPORT(target, Int8Array_Int16Array);
+	NAN_EXPORT(target, Uint8Array_Uint32Array);
+	NAN_EXPORT(target, Uint8Array_Uint16Array);
+
+	NAN_EXPORT(target, Int32Array_Float32Array);
+	NAN_EXPORT(target, Int16Array_Float32Array);
+	NAN_EXPORT(target, Uint16Array_Float32Array);
+	NAN_EXPORT(target, Int8Array_Float32Array);
+	NAN_EXPORT(target, Uint8Array_Float32Array);
+
+	NAN_EXPORT(target, Int32Array_Float64Array);
+	NAN_EXPORT(target, Int16Array_Float64Array);
+	NAN_EXPORT(target, Uint16Array_Float64Array);
+	NAN_EXPORT(target, Int8Array_Float64Array);
+	NAN_EXPORT(target, Uint8Array_Float64Array);
 }
 
 NODE_MODULE(tacvt, Init);

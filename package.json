@@ -7,6 +7,6 @@
   "author": "Zach Bjornson <zbbjornson@gmail.com>",
   "license": "MIT",
   "dependencies": {
-    "nan": "^2.12.1"
+    "nan": "nodejs/nan#master"
   }
 }
