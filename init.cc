@@ -100,6 +100,70 @@ NAN_METHOD(Float32Array_Int32Array) {
 	}
 }
 
+// Narrowing
+NAN_METHOD(Int32Array_Int16Array) {
+	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();
+	v8::Local<v8::ArrayBufferView> srcTA = info[1].As<v8::ArrayBufferView>();
+	Nan::TypedArrayContents<int64_t> dst(dstTA);
+	Nan::TypedArrayContents<int32_t> src(srcTA);
+	__m128i mask32_to_16 = _mm_setr_epi8(
+		0, 1, 4, 5, 8, 9, 12, 13,
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+	);
+
+	// Other possibilities:
+	// vcompressw with AVX512
+	// vpshufb into Ax|xB, vpermq into AB, store xmm
+	// vpshufb into Ax|xB, store lower xmm, extract upper, store xmm
+
+	for (size_t i = 0, j = 0; i < src.length(); i += 8, j += 2) {
+		auto srcvA = _mm_lddqu_si128((__m128i*)&(*src)[i]); // load 128
+		auto srcvB = _mm_lddqu_si128((__m128i*)&(*src)[i + 4]);
+		auto dstvA = _mm_shuffle_epi8(srcvA, mask32_to_16); // compress
+		auto dstvB = _mm_shuffle_epi8(srcvB, mask32_to_16);
+		(*dst)[j] = _mm_cvtsi128_si64(dstvA); // store 64
+		(*dst)[j + 1] = _mm_cvtsi128_si64(dstvB);
+	}
+}
+
+NAN_METHOD(Int32Array_Int8Array) {
+	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();
+	v8::Local<v8::ArrayBufferView> srcTA = info[1].As<v8::ArrayBufferView>();
+	Nan::TypedArrayContents<int32_t> dst(dstTA);
+	Nan::TypedArrayContents<int32_t> src(srcTA);
+	__m128i mask32_to_8 = _mm_setr_epi8(
+		0, 4, 8, 12, 0xFF, 0xFF, 0xFF, 0xFF,
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+	);
+
+	for (size_t i = 0, j = 0; i < src.length(); i += 8, j += 2) {
+		auto srcvA = _mm_lddqu_si128((__m128i*)&(*src)[i]); // load 128
+		auto srcvB = _mm_lddqu_si128((__m128i*)&(*src)[i + 4]);
+		auto dstvA = _mm_shuffle_epi8(srcvA, mask32_to_8); // compress
+		auto dstvB = _mm_shuffle_epi8(srcvB, mask32_to_8);
+		(*dst)[j] = _mm_cvtsi128_si32(dstvA); // store 64
+		(*dst)[j + 1] = _mm_cvtsi128_si32(dstvB);
+	}
+}
+
+NAN_METHOD(Int16Array_Int8Array) {
+	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();
+	v8::Local<v8::ArrayBufferView> srcTA = info[1].As<v8::ArrayBufferView>();
+	Nan::TypedArrayContents<int64_t> dst(dstTA);
+	Nan::TypedArrayContents<int16_t> src(srcTA);
+	__m128i mask16_to_8 = _mm_setr_epi8(
+		0, 2, 4, 6, 8, 10, 12, 14,
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+	);
+
+	for (size_t i = 0, j = 0; i < src.length(); i += 8, j += 1) {
+		auto srcvA = _mm_lddqu_si128((__m128i*)&(*src)[i]); // load 128
+		auto dstvA = _mm_shuffle_epi8(srcvA, mask16_to_8); // compress
+		(*dst)[j] = _mm_cvtsi128_si64(dstvA); // store 64
+	}
+}
+
+// Widening
 #define IntToIntConvert(Name, dsttype, srctype, cvtop)							\
 NAN_METHOD(Name) {																\
 	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();	\
@@ -229,6 +293,10 @@ NAN_MODULE_INIT(Init) {
 	NAN_EXPORT(target, Float32Array_Float64Array);
 
 	NAN_EXPORT(target, Float32Array_Int32Array);
+
+	NAN_EXPORT(target, Int32Array_Int16Array);
+	NAN_EXPORT(target, Int32Array_Int8Array);
+	NAN_EXPORT(target, Int16Array_Int8Array);
 
 	NAN_EXPORT(target, Int16Array_Int32Array);
 	NAN_EXPORT(target, Uint16Array_Uint32Array);

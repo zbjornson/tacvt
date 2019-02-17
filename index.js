@@ -74,6 +74,25 @@ function set(dst, src, offset = 0) {
 		case "Uint8Array_Uint16Array":
 			return bindings.Uint8Array_Uint16Array(dst, src, offset);
 
+		case "Int32Array_Int16Array":
+		case "Int32Array_Uint16Array":
+		case "Uint32Array_Int16Array":
+		case "Uint32Array_Uint16Array":
+			return bindings.Int32Array_Int16Array(dst, src, offset);
+
+		case "Int32Array_Int8Array":
+		case "Int32Array_Uint8Array":
+		case "Uint32Array_Int8Array":
+		case "Uint32Array_Uint8Array":
+			return bindings.Int32Array_Int8Array(dst, src, offset);
+
+
+		case "Int16Array_Int8Array":
+		case "Int16Array_Uint8Array":
+		case "Uint16Array_Int8Array":
+		case "Uint16Array_Uint8Array":
+			return bindings.Int16Array_Int8Array(dst, src, offset);
+
 		// conversions - TODO
 		case "Float32Array_Uint32Array":
 		case "Float32Array_Int16Array":
@@ -86,16 +105,6 @@ function set(dst, src, offset = 0) {
 		case "Float64Array_Uint16Array":
 		case "Float64Array_Int8Array":
 		case "Float64Array_Uint8Array":
-		case "Int32Array_Int16Array":
-		case "Int32Array_Int8Array":
-		case "Uint32Array_Int16Array":
-		case "Uint32Array_Uint16Array":
-		case "Uint32Array_Int8Array":
-		case "Uint32Array_Uint8Array":
-		case "Int16Array_Int8Array":
-		case "Int16Array_Uint8Array":
-		case "Uint16Array_Int8Array":
-		case "Uint16Array_Uint8Array":
 
 		// https://stackoverflow.com/questions/34066228/how-to-perform-uint32-float-conversion-with-sse
 		case "Uint32Array_Float64Array": // AVX512 _mm512_cvtepu32_pd
