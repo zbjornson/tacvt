@@ -33,6 +33,7 @@ function set(dst, src, offset = 0) {
 		// conversions - implemented
 		case "Float64Array_Float32Array":
 		case "Float32Array_Float64Array":
+		case "Float64Array_Int32Array":
 		case "Float32Array_Int32Array":
 
 		case "Int16Array_Float64Array":
@@ -99,7 +100,6 @@ function set(dst, src, offset = 0) {
 		case "Float32Array_Uint16Array":
 		case "Float32Array_Int8Array":
 		case "Float32Array_Uint8Array":
-		case "Float64Array_Int32Array":
 		case "Float64Array_Uint32Array":
 		case "Float64Array_Int16Array":
 		case "Float64Array_Uint16Array":

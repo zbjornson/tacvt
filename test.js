@@ -42,17 +42,19 @@ for (const From of types) {
 		src[9] = 1.9;
 		src[10] = -1.1;
 		src[11] = -1.9;
-	
-		// src[12] = 2**32;
-		// src[13] = 2**32 - 1;
-		// src[14] = 2**32 + 1;
-	
+		src[12] = 2**32 - 1;
+		src[13] = 2**32;
+		src[14] = 2**32 + 1;
 		src[15] = 2**16 - 1;
 		src[16] = 2**16;
 		src[17] = 2**16 + 1;
 		src[18] = (-2)**16 - 1;
 		src[19] = (-2)**16;
 		src[20] = (-2)**16 + 1;
+		src[21] = (-2)**32 - 1;
+		src[22] = (-2)**32;
+		src[23] = (-2)**32 + 1;
+
 
 		let start = process.hrtime.bigint();
 		for (let i = 0; i < times; i++) dst1.set(src);
@@ -70,7 +72,7 @@ for (const From of types) {
 				console.log(`${From.name} to ${To.name} okay`);
 			} catch (ex) {
 				for (let i = 0; i < src.length; i++) {
-					if (dst1[i] !== dst2[i]) console.log(src[i], dst1[i], dst2[i]);
+					if (dst1[i] !== dst2[i]) console.log(i, src[i], dst1[i], dst2[i]);
 				}
 				throw ex;
 			}

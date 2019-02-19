@@ -32,14 +32,16 @@ the note in `Float32Array` to `Int32Array` below.)
   ✔️ `Float32Array` to `Float64Array`
 
 * **Float to integer conversions** require specializations; only one is done.  
-  ✔️ `Float32Array` to `Int32Array` is ~~correct~~ failure around 2**32 and fairly fast.
-  (Depending on the values, it's *much* faster than v8.) Intel's instructions
-  don't match ECMA262 exactly: ECMA262 specifies that NaN, +Infinity and
-  -Infinity to return 0, and that values wrap-around in case of overflow,
-  whereas Intel's `cvt[t]ps2dq` returns 0x80000000 (-2147483648) in these cases.
-  Right now this module has a fast path for when the instruction matches the
-  spec (better than v8's fast path, see *TODO* below), and a slow scalar path to
-  fix up values that don't.
+  ✔️ `Float32Array` to `Int32Array`
+  ✔️ `Float64Array` to `Int32Array` are correct and fairly fast. (Depending on
+  the values, *much* faster than v8.) Intel's instructions don't match
+  ECMA262 exactly: ECMA262 specifies that NaN, +Infinity and -Infinity to return
+  0, and that values wrap-around in case of overflow, whereas Intel's
+  `cvt[t]ps2dq` returns 0x80000000 (-2147483648) in these cases. (Also,
+  ECMA262's `ToInt32` does not match the behavior of `static_cast<int32_t>` in
+  C++.) Right now this module has a fast path for when the instruction matches
+  the spec (better than v8's fast path, see *TODO* below), and a slow scalar
+  path to fix up values that don't.
 
   AVX512 `vfixupimmps` is potentially useful here but not widely available.
 
@@ -57,11 +59,10 @@ the note in `Float32Array` to `Int32Array` below.)
   static_cast<double>(static_cast<int32_t>(double_input)) == trunc(double_input)
   ```
   ❌ `Float32Array` to `Uint32Array` (AVX512)  
-  ❌ `Float32Array` to `Int16Array`  
+  ❌ `Float32Array` to `Int16Array` (SSE 4-at-a-time) 
   ❌ `Float32Array` to `Uint16Array`  
-  ❌ `Float32Array` to `Int8Array`  
+  ❌ `Float32Array` to `Int8Array` (SSE 4-at-a-time)  
   ❌ `Float32Array` to `Uint8Array`  
-  ❌ `Float64Array` to `Int32Array`  
   ❌ `Float64Array` to `Uint32Array`  
   ❌ `Float64Array` to `Int16Array`  
   ❌ `Float64Array` to `Uint16Array`  
@@ -128,7 +129,7 @@ Linux/GCC8
 ┌──────────────┬──────────────┬──────────────┬────────────┬─────────────┬────────────┬─────────────┬───────────┬────────────┐
 │ from   \  to │ Float64Array │ Float32Array │ Int32Array │ Uint32Array │ Int16Array │ Uint16Array │ Int8Array │ Uint8Array │
 ├──────────────┼──────────────┼──────────────┼────────────┼─────────────┼────────────┼─────────────┼───────────┼────────────┤
-│ Float64Array │     0.85     │    *4.19*    │    0.96    │    0.97     │    1.01    │    0.98     │   0.96    │    1.02    │
+│ Float64Array │     0.85     │    *4.19*    │   *6.05*   │    0.97     │    1.01    │    0.98     │   0.96    │    1.02    │
 │ Float32Array │    *4.46*    │     1.06     │  *22.63*   │    1.02     │    0.99    │    0.99     │   1.00    │    1.01    │
 │   Int32Array │    *4.43*    │    *7.18*    │    1.06    │    1.06     │  *13.71*   │  *14.65*    │ *10.57*   │   *7.19*   │
 │  Uint32Array │     1.10     │     0.93     │    1.48    │    0.99     │  *11.53*   │  *10.56*    │ *12.11*   │  *11.95*   │
@@ -144,7 +145,7 @@ Windows/MSVS 2017
 ┌──────────────┬──────────────┬──────────────┬────────────┬─────────────┬────────────┬─────────────┬───────────┬────────────┐
 │ from   \  to │ Float64Array │ Float32Array │ Int32Array │ Uint32Array │ Int16Array │ Uint16Array │ Int8Array │ Uint8Array │
 ├──────────────┼──────────────┼──────────────┼────────────┼─────────────┼────────────┼─────────────┼───────────┼────────────┤
-│ Float64Array │     1.04     │    *4.64*    │    1.01    │    1.02     │    1.08    │    0.92     │   0.95    │    0.96    │
+│ Float64Array │     1.04     │    *4.64*    │   *9.21*   │    1.02     │    1.08    │    0.92     │   0.95    │    0.96    │
 │ Float32Array │    *4.16*    │     1.09     │  *35.19*   │    1.00     │    1.04    │    0.94     │   1.01    │    1.03    │
 │   Int32Array │    *4.49*    │    *6.91*    │    1.05    │    0.98     │   *8.57*   │  *11.02*    │  *9.43*   │   *9.26*   │
 │  Uint32Array │     0.98     │     1.25     │    1.02    │    0.98     │   *7.32*   │   *8.28*    │  *8.45*   │   *5.30*   │

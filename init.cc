@@ -57,6 +57,19 @@ NAN_METHOD(Float64Array_Float32Array) {
 	}
 }
 
+template <typename T>
+inline int32_t ToInt32(T other) {
+	if (std::isnan(other)) {
+		return 0;
+	} else if (std::isinf(other)) {
+		return 0;
+	} else { // overflow -- maybe faster to use std::isfinite at the top of the if/else since this is probably most common
+		uint32_t u32v = static_cast<uint32_t>(other); // value % 2**32
+		return static_cast<int32_t>(u32v >= 2147483648 ? u32v - 4294967296 : u32v);
+		// std::fmod does not work here; might work in ToUint32
+	}
+}
+
 NAN_METHOD(Float32Array_Int32Array) {
 	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();
 	v8::Local<v8::ArrayBufferView> srcTA = info[1].As<v8::ArrayBufferView>();
@@ -78,7 +91,6 @@ NAN_METHOD(Float32Array_Int32Array) {
 
 		_mm256_storeu_si256(reinterpret_cast<__m256i*>(&(*dst)[i]), dstvA);
 
-		// auto allexact = !_mm256_testc_si256(exact, _mm256_set1_epi8(0xFF));
 		auto exactMask = _mm256_movemask_ps(_mm256_castsi256_ps(exact));
 		if (exactMask != 0xFF) { // Slow path: fixup.
 			// It might be faster to port v8's conversions-inl.h:DoubleToInt32 to SIMD,
@@ -86,15 +98,35 @@ NAN_METHOD(Float32Array_Int32Array) {
 			// operations, it might not be fast.
 			for (size_t j = 0; j < 8; j++) {
 				if (exactMask & (1 << j)) continue;
-				auto value = (*src)[i + j];
-				if (std::isnan(value)) {
-					value = 0;
-				} else if (std::isinf(value)) {
-					value = 0;
-				} else { // overflow -- maybe faster to use std::isfinite at the top of the if/else since this is probably most common
-					value = fmod(value, 0xFFFFFFFF);
-				}
-				(*dst)[i + j] = value;
+				float valueIn = (*src)[i + j];
+				(*dst)[i + j] = ToInt32(valueIn);
+			}
+		}
+	}
+}
+
+NAN_METHOD(Float64Array_Int32Array) {
+	v8::Local<v8::ArrayBufferView> dstTA = info[0].As<v8::ArrayBufferView>();
+	v8::Local<v8::ArrayBufferView> srcTA = info[1].As<v8::ArrayBufferView>();
+	Nan::TypedArrayContents<int32_t> dst(dstTA);
+	Nan::TypedArrayContents<double> src(srcTA);
+
+	// Same comments as above
+	for (size_t i = 0; i < dst.length(); i += 4) {
+		auto srcvA = _mm256_loadu_pd(&(*src)[i]);
+		srcvA = _mm256_round_pd(srcvA, _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC);
+		auto dstvA = _mm256_cvttpd_epi32(srcvA); // or cvtpd
+		auto backA = _mm256_cvtepi32_pd(dstvA);
+		auto exact = _mm256_cmpeq_epi64(_mm256_castpd_si256(srcvA), _mm256_castpd_si256(backA));
+
+		_mm_storeu_si128(reinterpret_cast<__m128i*>(&(*dst)[i]), dstvA);
+
+		auto exactMask = _mm256_movemask_pd(_mm256_castsi256_pd(exact));
+		if (exactMask != 0xF) {
+			for (size_t j = 0; j < 4; j++) {
+				if (exactMask & (1 << j)) continue;
+				double valueIn = (*src)[i + j];
+				(*dst)[i + j] = ToInt32(valueIn);
 			}
 		}
 	}
@@ -293,6 +325,7 @@ NAN_MODULE_INIT(Init) {
 	NAN_EXPORT(target, Float32Array_Float64Array);
 
 	NAN_EXPORT(target, Float32Array_Int32Array);
+	NAN_EXPORT(target, Float64Array_Int32Array);
 
 	NAN_EXPORT(target, Int32Array_Int16Array);
 	NAN_EXPORT(target, Int32Array_Int8Array);
